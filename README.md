@@ -1,0 +1,2 @@
+# audit
+Outil local, transparent et manuel d'analyse des journaux Windows et de l'historique de navigation. L'application analyse l'ordinateur, extrait les logs de sécurité, système, application, l'historique des navigateurs (Chrome, Edge, Firefox), les logiciels installés et les connexions réseau en direct. Elle génère automatiquement un rapport PDF professionnel, un export CSV complet et un manifeste d'intégrité cryptographique SHA-256 sur le Bureau.

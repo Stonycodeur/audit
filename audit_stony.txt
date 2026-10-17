@@ -1,0 +1,216 @@
+import os
+import sys
+import subprocess
+import sqlite3
+import datetime
+import glob
+
+# === 1. INSTALLATION AUTOMATIQUE DES DÉPENDANCES ===
+def install_dependencies():
+    required_packages = {
+        "flask": "flask",
+        "fpdf": "fpdf2",
+        "matplotlib": "matplotlib",
+        "pywebview": "pywebview"
+    }
+    
+    for module_name, package_name in required_packages.items():
+        try:
+            __import__(module_name)
+        except ImportError:
+            print(f"[*] Dépendance manquante détectée : {package_name}. Installation en cours...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", package_name])
+
+install_dependencies()
+
+# Import des bibliothèques après installation
+from flask import Flask, render_template, request, send_file
+from fpdf import FPDF
+import matplotlib.pyplot as plt
+import pywebview
+
+LOGO_PATH = "stony_logo.png"  # Mets ton logo ici
+
+# === 2. CRÉATION AUTOMATIQUE DU RACCOURCI BUREAU (WINDOWS) ===
+def create_desktop_shortcut():
+    if sys.platform == "win32":
+        try:
+            desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+            shortcut_path = os.path.join(desktop, "STONY-TECHNOLOGIE Audit.lnk")
+            
+            if not os.path.exists(shortcut_path):
+                script_path = os.path.abspath(sys.argv[0])
+                python_exe = sys.executable
+                
+                ps_cmd = f"""
+                $WScriptShell = New-Object -ComObject WScript.Shell
+                $Shortcut = $WScriptShell.CreateShortcut("{shortcut_path}")
+                $Shortcut.TargetPath = "{python_exe}"
+                $Shortcut.Arguments = '"{script_path}"'
+                $Shortcut.WorkingDirectory = "{os.path.dirname(script_path)}"
+                $Shortcut.Description = "STONY-TECHNOLOGIE - Audit Cybersécurité"
+                $Shortcut.Save()
+                """
+                subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True, text=True)
+                print("[+] Raccourci Bureau créé avec succès !")
+        except Exception as e:
+            print(f"[-] Erreur lors de la création du raccourci : {e}")
+
+create_desktop_shortcut()
+
+# === Classe PDF avec charte STONY-TECHNOLOGIE ===
+class StonyPDF(FPDF):
+    def header(self):
+        if os.path.exists(LOGO_PATH):
+            self.image(LOGO_PATH, 10, 8, 33)
+        self.set_font("Arial", 'B', 12)
+        self.set_text_color(10, 37, 64)  # bleu foncé
+        self.cell(0, 10, "STONY-TECHNOLOGIE - Audit Cybersécurité", ln=True, align="C")
+        self.ln(10)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font("Arial", 'I', 8)
+        self.set_text_color(0, 200, 150)  # vert technologique
+        self.cell(0, 10, "STONY-TECHNOLOGIE | Innovez pour demain - Page %s" % self.page_no(), align="C")
+
+# === Extraction des journaux Windows ===
+def extract_windows_logs(date):
+    try:
+        cmd = f'powershell Get-WinEvent -FilterHashtable @{{LogName="Security"; StartTime="{date}"; EndTime="{date} 23:59:59"}} | Select TimeCreated, Id, Message'
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        return result.stdout.splitlines()
+    except:
+        return ["Extraction Windows non disponible sur cet OS"]
+
+# === Extraction dynamique Firefox ===
+def get_firefox_history_path():
+    base_path = os.path.expanduser(r"~\\AppData\\Roaming\\Mozilla\\Firefox\\Profiles")
+    if os.path.exists(base_path):
+        profiles = glob.glob(os.path.join(base_path, "*.default-release")) + glob.glob(os.path.join(base_path, "*.default"))
+        if profiles:
+            return os.path.join(profiles[0], "places.sqlite")
+    return ""
+
+# === Extraction générique navigateurs ===
+def extract_browser_history(db_path, date, firefox=False):
+    data = []
+    if not db_path or not os.path.exists(db_path): return data
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        if firefox:
+            cursor.execute("SELECT url, title, datetime(last_visit_date/1000000,'unixepoch') FROM moz_places")
+        else:
+            cursor.execute("SELECT url, title, datetime(last_visit_time/1000000-11644473600,'unixepoch') FROM urls")
+        for url, title, visit_time in cursor.fetchall():
+            try:
+                if visit_time:
+                    visit_date = datetime.datetime.strptime(visit_time, "%Y-%m-%d %H:%M:%S").date()
+                    if visit_date == date:
+                        data.append((url, title, visit_time))
+            except: continue
+        conn.close()
+    except Exception as e:
+        print(f"Erreur lecture bdd navigateur: {e}")
+    return data
+
+# === Génération graphique ===
+def generate_graph(counts, filename):
+    labels = ["Windows Logs", "Chrome", "Edge", "Firefox"]
+    plt.figure(figsize=(6,6))
+    plt.pie(counts, labels=labels, autopct='%1.1f%%', startangle=140)
+    plt.savefig(filename)
+    plt.close()
+
+# === Génération PDF ===
+def generate_pdf(date, win_logs, chrome_logs, edge_logs, firefox_logs, filename="rapport_stony.pdf"):
+    pdf = StonyPDF()
+    pdf.add_page()
+
+    # Page de garde
+    pdf.set_font("Arial", 'B', 24)
+    pdf.set_text_color(10, 37, 64)
+    pdf.cell(0, 20, "Rapport d'Audit Cybersécurité", ln=True, align="C")
+    pdf.set_font("Arial", 'I', 14)
+    pdf.set_text_color(255, 107, 53)
+    pdf.cell(0, 10, f"Date: {date}", ln=True, align="C")
+    pdf.ln(20)
+
+    # Sommaire
+    pdf.set_font("Arial", 'B', 16)
+    pdf.set_text_color(10, 37, 64)
+    pdf.cell(0, 10, "Sommaire", ln=True)
+    pdf.set_font("Arial", '', 12)
+    pdf.set_text_color(0, 0, 0)
+    pdf.multi_cell(0, 8, "- Journaux Windows\n- Historique Chrome\n- Historique Edge\n- Historique Firefox\n- Graphiques")
+
+    # Sections
+    def add_section(title, color, logs):
+        pdf.add_page()
+        pdf.set_font("Arial", 'B', 14)
+        pdf.set_fill_color(*color)
+        pdf.set_text_color(255, 255, 255)
+        pdf.cell(0, 10, title, ln=True, fill=True)
+        pdf.set_font("Arial", '', 10)
+        pdf.set_text_color(0, 0, 0)
+        for log in logs[:50]:
+            if isinstance(log, tuple):
+                pdf.multi_cell(0, 5, f"{log[2]} - {log[1]} ({log[0]})")
+            else:
+                pdf.multi_cell(0, 5, str(log))
+
+    add_section("Journaux Windows", (10,37,64), win_logs)
+    add_section("Historique Chrome", (0,200,150), chrome_logs)
+    add_section("Historique Edge", (255,107,53), edge_logs)
+    add_section("Historique Firefox", (128,0,128), firefox_logs)
+
+    # Graphiques
+    pdf.add_page()
+    counts = [len(win_logs), len(chrome_logs), len(edge_logs), len(firefox_logs)]
+    graph_file = "graph.png"
+    generate_graph(counts, graph_file)
+    if os.path.exists(graph_file):
+        pdf.image(graph_file, x=30, y=50, w=150)
+
+    pdf.output(filename)
+    return filename
+
+# === Flask App ===
+app = Flask(__name__)
+
+@app.route("/", methods=["GET", "POST"])
+def index():
+    if request.method == "POST":
+        date_str = request.form.get("date")
+        try:
+            date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+        except:
+            return "Format de date invalide (YYYY-MM-DD)"
+
+        win_logs = extract_windows_logs(date)
+        chrome_logs = extract_browser_history(os.path.expanduser(r"~\\AppData\\Local\\Google\\Chrome\\User Data\\Default\\History"), date)
+        edge_logs = extract_browser_history(os.path.expanduser(r"~\\AppData\\Local\\Microsoft\\Edge\\User Data\\Default\\History"), date)
+        firefox_logs = extract_browser_history(get_firefox_history_path(), date, firefox=True)
+
+        pdf_file = generate_pdf(date, win_logs, chrome_logs, edge_logs, firefox_logs)
+        return send_file(pdf_file, as_attachment=True)
+
+    return '''
+    <html>
+    <head><title>STONY-TECHNOLOGIE Audit</title></head>
+    <body style="font-family:Arial; text-align:center; background:#F5F5F5; padding-top:50px;">
+        <h1 style="color:#0A2540;">STONY-TECHNOLOGIE - Audit Cybersécurité</h1>
+        <form method="POST" style="background:white; display:inline-block; padding:30px; border-radius:8px; box-shadow: 0px 0px 10px rgba(0,0,0,0.1);">
+            <label style="font-weight:bold; color:#0A2540;">Date de l'audit (YYYY-MM-DD):</label><br>
+            <input type="text" name="date" placeholder="2026-06-06" style="padding:8px; margin:15px; width:200px; text-align:center;"><br>
+            <button type="submit" style="background:#00C896; color:white; padding:10px 20px; border:none; border-radius:4px; font-weight:bold; cursor:pointer;">Générer Rapport PDF</button>
+        </form>
+    </body>
+    </html>
+    '''
+
+# === Lancement avec PyWebView ===
+if __name__ == "__main__":
+    window = pywebview.create_window("STONY-TECHNOLOGIE Audit", app, width=800, height=600)
+    pywebview.start()
